@@ -47,7 +47,7 @@ Data flow:
 
 1. Clone the repository:
 ```bash
-git clone < repository-url>
+git clone git@github.com:miluxhd/ghostway.git
 cd ghostway
 ```
 
@@ -55,7 +55,7 @@ cd ghostway
 ```yaml
 ghostway-server:
   environment:
-    - TARGET_IP=your_tcp_server_host  # Change this if needed
+    - TARGET_IP=your_tcp_server_host
 ```
 
 3. Start the services:
