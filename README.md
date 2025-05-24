@@ -18,8 +18,14 @@ The project consists of two main services:
    - Forwards data to target TCP server (default port 8003)
 
 ## Communication Flow
+```
+                                       +------------------+       8002 (HTTP     +----------------+
++--------+          TCP (8001)         |      Ghostway    |+-------------------->|      Ghostway  |           TCP (8003)        +------------------+
+|  User  |+--------------------------->|       Client     |<--------------------+|       Server   |+--------------------------->|  Target Service  |
++--------+                             +------------------+       9001 (HTTP)    +----------------+                             +------------------+
 
 ```
+
 Data flow:
 1. External TCP Client -> Ghostway Client (8001/TCP)
 2. Ghostway Client -> Ghostway Server (8002/HTTP POST, internal)
