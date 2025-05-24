@@ -15,7 +15,7 @@ TARGET_TCP_PORT = 8003   # Port of the TCP server for testing responses
 # To indicate when to stop
 stop_flag = threading.Event()
 
-def generate_random_message(length=10):
+def generate_random_message(length=2000):
     """Generate a random message for testing."""
     letters = string.ascii_letters + string.digits
     return ''.join(random.choice(letters) for _ in range(length))
@@ -61,7 +61,7 @@ def handle_tcp_client(client_socket, address, echo_responses):
         
         while not stop_flag.is_set():
             try:
-                data = client_socket.recv(1024)
+                data = client_socket.recv(4000)
                 if not data:
                     logger.info(f"TCP server: Client {address} closed connection")
                     break
@@ -124,7 +124,7 @@ def receive_responses(sock):
         
         while not stop_flag.is_set():
             try:
-                data = sock.recv(1024)
+                data = sock.recv(4000)
                 if not data:
                     logger.info("Connection closed by server")
                     break
