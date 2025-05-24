@@ -1,0 +1,39 @@
+services:
+  ghostway-server:
+    build:
+      context: ./server
+    ports:
+      - "8002:8002"  # Internal Communication Port 
+    environment:
+      - HTTP_PORT=8002
+      - TARGET_IP=ghostway-tests  # This should be set to your actual TCP server host (mostly it's 127.0.0.1)
+      - TARGET_TCP_PORT=8003 # TCP Port of Server 
+    networks:
+      - ghostway
+        
+  ghostway-client:
+    build:
+      context: ./client
+    ports:
+      - "8001:8001"  # Local TCP server port
+      - "9001:9001"  # Internal Communication port
+    environment:
+      - TCP_PORT=8001
+      - TARGET_HTTP_PORT=8002
+      - RESPONSE_HTTP_PORT=9001
+      - TARGET_IP=ghostway-server # Should be the  HTunnel Server
+    networks:
+      - ghostway
+
+  ghostway-tests:
+    build:
+      context: ./tests
+    ports:
+      - "8003:8003"  
+    networks:
+      - ghostway
+
+
+networks:
+  ghostway:
+    driver: bridge 
