@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY http_to_tcp.py .
+COPY *.py .
 
 EXPOSE 8002
 
@@ -13,4 +13,4 @@ ENV HTTP_PORT=8002
 ENV TARGET_TCP_PORT=8003
 ENV TARGET_IP=localhost
 
-CMD ["python", "http_to_tcp.py"] 
+CMD ["python", "main.py"] 
