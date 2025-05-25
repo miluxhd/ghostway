@@ -1,5 +1,6 @@
 import base64
 from http.server import BaseHTTPRequestHandler
+import gzip
 
 from config import logger
 from tcp_server import TcpServer
@@ -53,6 +54,7 @@ class HttpRequestHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get('Content-Length', 0))
         session_id = self.headers.get('Session-ID', str(self.client_address[1]))
         response_port = self.headers.get('Response-Port')
+        content_encoding = self.headers.get('X-Content-Encoding')
         
         if response_port:
             with self.tcp_server.connection_lock:
@@ -66,8 +68,12 @@ class HttpRequestHandler(BaseHTTPRequestHandler):
         
         try:
             decoded_data = base64.b64decode(encoded_data)
-            logger.info(f"Received base64 data from HTTP, session: {session_id}, length: {len(decoded_data)}")
-            logger.info(f"Decoded data: {decoded_data.decode('utf-8', errors='replace')}")
+            
+            if content_encoding == 'gzip':
+                decoded_data = gzip.decompress(decoded_data)
+                logger.info(f"Decompressed gzip data for session {session_id}, decompressed size: {len(decoded_data)}")
+            
+            logger.info(f"Received data from HTTP, session: {session_id}, length: {len(decoded_data)}")
             
             with self.tcp_server.connection_lock:
                 if session_id not in self.tcp_server.tcp_connections:
@@ -99,6 +105,8 @@ class HttpRequestHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
             self.wfile.write(f"Error processing data: {e}".encode())
+            if isinstance(e, UnicodeDecodeError):
+                logger.error(f"UnicodeDecodeError: {e}. Original data (first 100 bytes if available): {encoded_data[:100]}")
     
     def do_GET(self):
         # Simple health check

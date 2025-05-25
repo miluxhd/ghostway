@@ -2,8 +2,9 @@ import socket
 import threading
 import requests
 import base64
+import gzip
 
-from config import logger, TARGET_IP, TARGET_TCP_PORT
+from config import logger, TARGET_IP, TARGET_TCP_PORT, GZIP_ENABLED, GZIP_THRESHOLD_BYTES
 
 INITIAL_BUFFER_SIZE = 1024
 MAX_BUFFER_SIZE = 65536 # Max TCP packet size
@@ -78,15 +79,22 @@ class TcpServer:
                         current_buffer_size = max(current_buffer_size // BUFFER_GROWTH_FACTOR, INITIAL_BUFFER_SIZE)
                         logger.info(f"Buffer underutilized, decreasing buffer size to {current_buffer_size} for session {session_id}")
 
-                    encoded_response = base64.b64encode(response_data).decode('utf-8')
+                    payload_data = response_data
+                    headers = {
+                        'Session-ID': session_id,
+                        'Content-Type': 'application/octet-stream'
+                    }
+                    if GZIP_ENABLED and len(response_data) > GZIP_THRESHOLD_BYTES:
+                        payload_data = gzip.compress(response_data)
+                        headers['X-Content-Encoding'] = 'gzip'
+                        logger.info(f"Compressed response for session {session_id}, original size: {len(response_data)}, compressed size: {len(payload_data)}")
+
+                    encoded_response = base64.b64encode(payload_data).decode('utf-8')
                     try:
                         http_response = requests.post(
                             response_url,
                             data=encoded_response,
-                            headers={
-                                'Session-ID': session_id,
-                                'Content-Type': 'application/octet-stream'
-                            }
+                            headers=headers
                         )
                         logger.info(f"Forwarded TCP server response to TCP client via HTTP, status: {http_response.status_code}")
                     except Exception as e:

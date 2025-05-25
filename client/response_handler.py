@@ -2,6 +2,7 @@ import base64
 from http.server import BaseHTTPRequestHandler
 import socket
 import threading
+import gzip
 
 from config import logger
 
@@ -14,6 +15,7 @@ class ResponseHandler(BaseHTTPRequestHandler):
         try:
             content_length = int(self.headers.get('Content-Length', 0))
             session_id = self.headers.get('Session-ID')
+            content_encoding = self.headers.get('X-Content-Encoding')
             
             if not session_id:
                 self.send_response(400)
@@ -27,6 +29,11 @@ class ResponseHandler(BaseHTTPRequestHandler):
             
             try:
                 decoded_data = base64.b64decode(encoded_data)
+                
+                if content_encoding == 'gzip':
+                    decoded_data = gzip.decompress(decoded_data)
+                    logger.info(f"Decompressed gzip response for session {session_id}, decompressed size: {len(decoded_data)}")
+                
                 logger.info(f"Received response for session {session_id}, length: {len(decoded_data)}")
                 
                 # Find the TCP connection for this session

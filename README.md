@@ -33,7 +33,6 @@ Data flow:
 4. TCP Server -> Ghostway Server (TCP Response)
 5. Ghostway Server -> Ghostway Client (9001/HTTP Response, internal)
 6. Ghostway Client -> TCP Client (8001/TCP Response)
-```
 
 ## Features
 
@@ -43,6 +42,18 @@ Data flow:
 - Connection pooling and keep-alive support
 - TCP socket optimizations
 - HTTP request optimizations
+- Adaptive TCP buffer sizing
+- Configurable Gzip Compression for HTTP Payloads
+
+## Configurable Gzip Compression
+
+Ghostway supports optional gzip compression for data payloads transmitted between the `ghostway-client` and `ghostway-server` via HTTP. This can help reduce bandwidth usage for larger data packets.
+
+Compression is applied if:
+1. Gzip is enabled via the `GZIP_ENABLED` environment variable.
+2. The size of the data packet exceeds the `GZIP_THRESHOLD_BYTES` environment variable.
+
+A custom HTTP header `X-Content-Encoding: gzip` is added to requests/responses when the payload is compressed.
 
 ## Prerequisites
 
@@ -75,11 +86,15 @@ docker compose up --build
 - `TCP_PORT`: TCP server port (default: 8001)
 - `TARGET_HTTP_PORT`: Target (Ghostway Server) HTTP port (default: 8002)
 - `TARGET_IP`: IP of Ghostway Server
+- `GZIP_ENABLED`: Enable or disable gzip compression (default: `true`). Set to `false` to disable.
+- `GZIP_THRESHOLD_BYTES`: Minimum payload size in bytes to trigger gzip compression (default: `1024`).
 
 ### Ghostway Server:
 - `HTTP_PORT`: HTTP server port (default: 8002)
 - `TARGET_TCP_PORT`: Target TCP port (default: 8003)
 - `TARGET_IP`: Target TCP server address
+- `GZIP_ENABLED`: Enable or disable gzip compression (default: `true`). Set to `false` to disable.
+- `GZIP_THRESHOLD_BYTES`: Minimum payload size in bytes to trigger gzip compression (default: `1024`).
 
 ## Testing
 
@@ -125,12 +140,13 @@ The project includes several optimizations for high performance:
 - [ ] Implement unit tests for core functionality
 
 ### Performance Enhancements
-- [ ] Implement data compression for HTTP transport
-    - [ ] Add gzip/deflate compression support
-    - [ ] Add configurable compression levels
+- [x] Implement data compression for HTTP transport
+    - [x] Add gzip compression support
+    - [x] Add configurable compression threshold and enable/disable flag
+    - [ ] Add configurable compression levels (currently uses gzip default)
 - [ ] Optimize connection speed
     - [ ] Implement connection pooling improvements
-    - [ ] Fine-tune buffer sizes
+    - [x] Fine-tune buffer sizes (implemented adaptive buffers)
     - [ ] Add connection timeout configurations
     - [ ] Optimize TCP socket parameters
 
@@ -147,8 +163,6 @@ The project includes several optimizations for high performance:
 - [ ] Create detailed deployment guide
 - [ ] Add performance tuning guide
 - [ ] Include troubleshooting section
-
-
 
 ## License
 
