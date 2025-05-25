@@ -3,8 +3,9 @@ import threading
 import requests
 import base64
 from http.server import HTTPServer
+import gzip
 
-from config import logger, TARGET_IP, TARGET_HTTP_PORT, RESPONSE_HTTP_PORT
+from config import logger, TARGET_IP, TARGET_HTTP_PORT, RESPONSE_HTTP_PORT, GZIP_ENABLED, GZIP_THRESHOLD_BYTES
 from response_handler import ResponseHandler, active_tcp_connections, connection_lock
 
 INITIAL_BUFFER_SIZE = 1024
@@ -86,13 +87,19 @@ class TcpClient:
 
     def forward_to_http(self, data, session_id):
         try:
-            encoded_data = base64.b64encode(data).decode('utf-8')
-            
             headers = {
                 'Session-ID': session_id,
                 'Content-Type': 'application/octet-stream',
                 'Response-Port': str(RESPONSE_HTTP_PORT)
             }
+            
+            payload_data = data
+            if GZIP_ENABLED and len(data) > GZIP_THRESHOLD_BYTES:
+                payload_data = gzip.compress(data)
+                headers['X-Content-Encoding'] = 'gzip'
+                logger.info(f"Compressed data for session {session_id}, original size: {len(data)}, compressed size: {len(payload_data)}")
+            
+            encoded_data = base64.b64encode(payload_data).decode('utf-8')
             
             response = requests.post(
                 f'http://{TARGET_IP}:{TARGET_HTTP_PORT}/', 
