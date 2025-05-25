@@ -5,6 +5,10 @@ import base64
 
 from config import logger, TARGET_IP, TARGET_TCP_PORT
 
+INITIAL_BUFFER_SIZE = 1024
+MAX_BUFFER_SIZE = 65536 # Max TCP packet size
+BUFFER_GROWTH_FACTOR = 2
+
 class TcpServer:
     def __init__(self):
         self.tcp_connections = {}
@@ -50,20 +54,30 @@ class TcpServer:
             endpoint = self.response_endpoints[session_id]
             response_url = f"http://{endpoint['ip']}:{endpoint['port']}/"
             
+        current_buffer_size = INITIAL_BUFFER_SIZE
         try:
             # Set socket to non-blocking mode for reading
             sock.settimeout(0.5)
             
             while True:
                 try:
-                    response_data = sock.recv(1024)
+                    response_data = sock.recv(current_buffer_size)
                     
                     if not response_data:
                         logger.info(f"TCP server closed connection for session {session_id}")
                         break
                     
-                    logger.info(f"Received data from TCP server for session {session_id}, length: {len(response_data)}")
+                    received_length = len(response_data)
+                    logger.info(f"Received data from TCP server for session {session_id}, length: {received_length}, buffer_size: {current_buffer_size}")
                     
+                    if received_length == current_buffer_size:
+                        current_buffer_size = min(current_buffer_size * BUFFER_GROWTH_FACTOR, MAX_BUFFER_SIZE)
+                        logger.info(f"Buffer filled, increasing buffer size to {current_buffer_size} for session {session_id}")
+                    elif received_length < current_buffer_size // (BUFFER_GROWTH_FACTOR * 2) and current_buffer_size > INITIAL_BUFFER_SIZE:
+                        # Optional: Decrease buffer size if significantly underutilized
+                        current_buffer_size = max(current_buffer_size // BUFFER_GROWTH_FACTOR, INITIAL_BUFFER_SIZE)
+                        logger.info(f"Buffer underutilized, decreasing buffer size to {current_buffer_size} for session {session_id}")
+
                     encoded_response = base64.b64encode(response_data).decode('utf-8')
                     try:
                         http_response = requests.post(
