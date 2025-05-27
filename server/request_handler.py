@@ -1,149 +1,119 @@
 import base64
-from http.server import BaseHTTPRequestHandler
 import gzip
+import asyncio
+from aiohttp import web
 
 from config import logger
-from tcp_server import TcpServer
+# TcpServer will be imported and used by type hint, but instance comes from request.app
+# from tcp_server import TcpServer 
 
-class HttpRequestHandler(BaseHTTPRequestHandler):
-    def __init__(self, request, client_address, server):
-        self.tcp_server = server.tcp_server
-        super().__init__(request, client_address, server)
+async def handle_put_request(request: web.Request):
+    """Handle PUT requests for session initialization."""
+    tcp_server = request.app['tcp_server'] # Get TcpServer instance
+    session_id = request.headers.get('Session-ID')
+    response_port = request.headers.get('Response-Port')
+    
+    if not session_id:
+        return web.Response(text="Missing Session-ID header", status=400)
+    if not response_port:
+        return web.Response(text="Missing Response-Port header", status=400)
+    
+    # Assuming tcp_server.connection_lock is now asyncio.Lock
+    async with tcp_server.connection_lock:
+        tcp_server.response_endpoints[session_id] = {
+            'ip': request.remote, # Correct way to get client IP in aiohttp might vary based on proxy setup
+            'port': response_port
+        }
+        logger.info(f"Registered response endpoint for session {session_id}: {request.remote}:{response_port}")
+    
+    # ensure_tcp_connection will be an async method
+    success = await tcp_server.ensure_tcp_connection(session_id)
+    
+    if success:
+        return web.Response(text="Session initialized successfully", status=200)
+    else:
+        return web.Response(text="Failed to initialize session", status=500)
 
-    def do_PUT(self):
-        """Handle PUT requests for session initialization."""
-        session_id = self.headers.get('Session-ID')
-        response_port = self.headers.get('Response-Port')
-        
-        if not session_id:
-            self.send_response(400)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b"Missing Session-ID header")
-            return
-            
-        if not response_port:
-            self.send_response(400)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b"Missing Response-Port header")
-            return
-        
-        with self.tcp_server.connection_lock:
-            self.tcp_server.response_endpoints[session_id] = {
-                'ip': self.client_address[0],
+async def handle_post_request(request: web.Request):
+    """Handle POST requests to forward data to the target TCP server."""
+    tcp_server = request.app['tcp_server']
+    session_id = request.headers.get('Session-ID')
+    response_port = request.headers.get('Response-Port') # For updating endpoint if needed
+    content_encoding = request.headers.get('X-Content-Encoding')
+
+    if not session_id:
+        logger.warning(f"POST request missing Session-ID from {request.remote}")
+        # Fallback to client address as session_id is not ideal for async without care
+        # For now, require session_id
+        return web.Response(text="Missing Session-ID header", status=400)
+
+    if response_port:
+        async with tcp_server.connection_lock:
+            tcp_server.response_endpoints[session_id] = {
+                'ip': request.remote,
                 'port': response_port
             }
-            logger.info(f"Registered response endpoint for session {session_id}: {self.client_address[0]}:{response_port}")
+            logger.info(f"Updated response endpoint for session {session_id}: {request.remote}:{response_port}")
+    
+    try:
+        raw_body = await request.read() # Read raw bytes
+        encoded_data = raw_body.decode('utf-8') # Assuming base64 is utf-8 encoded
+        decoded_data = base64.b64decode(encoded_data)
         
-        # Initialize TCP connection
-        success = self.tcp_server.ensure_tcp_connection(session_id)
+        if content_encoding == 'gzip':
+            try:
+                decompressed_data = gzip.decompress(decoded_data)
+                logger.info(f"Decompressed gzip data for session {session_id}, original: {len(decoded_data)}, decompressed: {len(decompressed_data)}")
+                decoded_data = decompressed_data
+            except gzip.BadGzipFile as e:
+                logger.error(f"BadGzipFile for session {session_id} in POST: {e}. Data: {decoded_data[:100]}")
+                return web.Response(text=f"Bad gzip data: {e}", status=400)
+            except Exception as e:
+                logger.error(f"Error decompressing gzip for session {session_id} in POST: {e}")
+                return web.Response(text=f"Gzip decompression error: {e}", status=500)
         
-        if success:
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b"Session initialized successfully")
+        logger.info(f"Received data from HTTP for session {session_id}, length: {len(decoded_data)}")
+        
+        async with tcp_server.connection_lock:
+            if session_id not in tcp_server.tcp_connections:
+                logger.error(f"No TCP connection for session {session_id}. Initialize with PUT.")
+                return web.Response(text="Session not initialized. Send PUT request first.", status=400)
+            
+            target_socket_writer = tcp_server.tcp_connections[session_id]['writer'] # Assuming writer is stored
+        
+        if target_socket_writer and not target_socket_writer.is_closing():
+            target_socket_writer.write(decoded_data)
+            await target_socket_writer.drain()
+            logger.info(f"Sent data to target TCP server for session: {session_id}, length: {len(decoded_data)}")
+            return web.Response(text="Data forwarded to TCP server successfully", status=200)
         else:
-            self.send_response(500)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b"Failed to initialize session")
+            logger.error(f"Target TCP socket writer not available or closing for session {session_id}")
+            return web.Response(text="Failed to forward data: target TCP connection issue.", status=500)
+            
+    except Exception as e:
+        logger.error(f"Error processing POST data for session {session_id}: {e}", exc_info=True)
+        return web.Response(text=f"Error processing data: {e}", status=500)
 
-    def do_POST(self):
-        content_length = int(self.headers.get('Content-Length', 0))
-        session_id = self.headers.get('Session-ID', str(self.client_address[1]))
-        response_port = self.headers.get('Response-Port')
-        content_encoding = self.headers.get('X-Content-Encoding')
-        
-        if response_port:
-            with self.tcp_server.connection_lock:
-                self.tcp_server.response_endpoints[session_id] = {
-                    'ip': self.client_address[0],
-                    'port': response_port
-                }
-                logger.info(f"Updated response endpoint for session {session_id}: {self.client_address[0]}:{response_port}")
-        
-        encoded_data = self.rfile.read(content_length).decode('utf-8')
-        
-        try:
-            decoded_data = base64.b64decode(encoded_data)
-            
-            if content_encoding == 'gzip':
-                decoded_data = gzip.decompress(decoded_data)
-                logger.info(f"Decompressed gzip data for session {session_id}, decompressed size: {len(decoded_data)}")
-            
-            logger.info(f"Received data from HTTP, session: {session_id}, length: {len(decoded_data)}")
-            
-            with self.tcp_server.connection_lock:
-                if session_id not in self.tcp_server.tcp_connections:
-                    logger.error(f"No TCP connection found for session {session_id}. Session must be initialized first.")
-                    self.send_response(400)
-                    self.send_header('Content-type', 'text/plain')
-                    self.end_headers()
-                    self.wfile.write(b"Session not initialized. Send PUT request first.")
-                    return
-                
-                try:
-                    self.tcp_server.tcp_connections[session_id].sendall(decoded_data)
-                    logger.info(f"Sent data to TCP server, session: {session_id}, length: {len(decoded_data)}")
-                    
-                    self.send_response(200)
-                    self.send_header('Content-type', 'text/plain')
-                    self.end_headers()
-                    self.wfile.write(b"Data forwarded to TCP server successfully")
-                except Exception as e:
-                    logger.error(f"Error forwarding data to TCP server: {e}")
-                    self.send_response(500)
-                    self.send_header('Content-type', 'text/plain')
-                    self.end_headers()
-                    self.wfile.write(b"Failed to forward data to TCP server")
-                    
-        except Exception as e:
-            logger.error(f"Error processing data: {e}")
-            self.send_response(400)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(f"Error processing data: {e}".encode())
-            if isinstance(e, UnicodeDecodeError):
-                logger.error(f"UnicodeDecodeError: {e}. Original data (first 100 bytes if available): {encoded_data[:100]}")
+async def handle_delete_request(request: web.Request):
+    """Handle DELETE requests for session termination."""
+    tcp_server = request.app['tcp_server']
+    session_id = request.headers.get('Session-ID')
     
-    def do_GET(self):
-        # Simple health check
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b"HTTP to TCP service is running")
-    
-    def do_DELETE(self):
-        """Handle DELETE requests for session termination."""
-        session_id = self.headers.get('Session-ID', None)
-        
-        if not session_id:
-            self.send_response(400)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b"Missing Session-ID header")
-            return
+    if not session_id:
+        return web.Response(text="Missing Session-ID header", status=400)
             
-        logger.info(f"Received session termination request for session: {session_id}")
-        
-        # Close and remove the TCP connection for this session
-        with self.tcp_server.connection_lock:
-            if session_id in self.tcp_server.tcp_connections:
-                logger.info(f"Closing TCP connection for session {session_id}")
-                try:
-                    self.tcp_server.tcp_connections[session_id].close()
-                except Exception as e:
-                    logger.error(f"Error closing connection for session {session_id}: {e}")
-                finally:
-                    del self.tcp_server.tcp_connections[session_id]
-                    
-            if session_id in self.tcp_server.response_endpoints:
-                del self.tcp_server.response_endpoints[session_id]
-                logger.info(f"Removed response endpoint for session {session_id}")
-        
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b"Session terminated successfully") 
+    logger.info(f"Received session termination request for session: {session_id}")
+    
+    await tcp_server.close_session_components(session_id) # New async method in TcpServer
+    
+    return web.Response(text="Session terminated successfully", status=200)
+
+async def handle_get_request(request: web.Request):
+    """Handle GET requests for health check."""
+    return web.Response(text="HTTP to TCP service is running (async)", status=200)
+
+def setup_routes(app: web.Application):
+    app.router.add_put('/', handle_put_request)
+    app.router.add_post('/', handle_post_request)
+    app.router.add_delete('/', handle_delete_request)
+    app.router.add_get('/', handle_get_request) # Health check 
