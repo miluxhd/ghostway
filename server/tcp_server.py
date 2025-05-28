@@ -116,13 +116,36 @@ class TcpServer:
             logger.error(f"Outer error in TCP response handler for session {session_id}: {e}", exc_info=True)
         finally:
             logger.info(f"TCP response handler for session {session_id} is stopping.")
+            
+            original_exception_to_reraise = None
+
             if writer and not writer.is_closing():
                 writer.close()
                 try:
                     await writer.wait_closed()
-                except Exception as e:
-                     logger.error(f"Error during target TCP writer.wait_closed for session {session_id}: {e}")
-            await self.close_session_components(session_id, originating_task_cancelled=True)
+                except asyncio.CancelledError as e_cancel:
+                    logger.warning(f"writer.wait_closed() cancelled for session {session_id} in HTR finally.")
+                    original_exception_to_reraise = e_cancel # Mark for re-raising
+                except Exception as e_other:
+                    logger.error(f"Error during target TCP writer.wait_closed for session {session_id}: {e_other}", exc_info=True)
+                    # Do not set original_exception_to_reraise for general errors here by default,
+                    # but allow critical CSC errors to be prioritized later if this was the only issue.
+                    if original_exception_to_reraise is None: # Don't overwrite a CancelledError
+                        original_exception_to_reraise = e_other
+
+
+            try:
+                # This call is vital for cleanup. originating_task_cancelled=True because HTR is cleaning itself up.
+                await self.close_session_components(session_id, originating_task_cancelled=True)
+            except Exception as e_csc:
+                logger.critical(f"CRITICAL: Error in self.close_session_components called from HTR finally for session {session_id}: {e_csc}", exc_info=True)
+                # If CSC fails, this session's resources are likely leaked.
+                # Prioritize raising the original CancelledError if it exists, otherwise this CSC error.
+                if not isinstance(original_exception_to_reraise, asyncio.CancelledError):
+                    original_exception_to_reraise = e_csc
+
+            if original_exception_to_reraise is not None:
+                raise original_exception_to_reraise
 
     async def close_session_components(self, session_id: str, originating_task_cancelled: bool = False):
         """Close and clean up all components related to a session."""
@@ -146,11 +169,14 @@ class TcpServer:
                     task.cancel()
                     logger.info(f"Response handler task for session {session_id} cancellation requested.")
                     try:
-                        await task
+                        # Wait for the task to finish with a timeout
+                        await asyncio.wait_for(task, timeout=5.0) # 5 seconds timeout
                     except asyncio.CancelledError:
                         logger.info(f"Response handler task for session {session_id} successfully cancelled.")
+                    except asyncio.TimeoutError:
+                        logger.error(f"Response handler task for session {session_id} did not terminate within timeout after cancellation. It might be orphaned.")
                     except Exception as e:
-                        logger.error(f"Error awaiting cancelled response handler task for session {session_id}: {e}")
+                        logger.error(f"Error awaiting cancelled response handler task for session {session_id}: {e}", exc_info=True)
             
             if session_id in self.response_endpoints:
                 del self.response_endpoints[session_id]
