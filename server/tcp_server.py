@@ -59,14 +59,11 @@ class TcpServer:
             if session_id not in self.response_endpoints:
                 logger.error(f"No response endpoint for session {session_id} in handle_tcp_responses. Aborting.")
                 return 
-            endpoint = self.response_endpoints[session_id]
-            client_ip = endpoint['ip']
-            if not isinstance(client_ip, str):
-                client_ip = str(client_ip)
-                logger.warning(f"Response endpoint IP for session {session_id} was not a string: {endpoint['ip']}. Converted to {client_ip}")
-
-            response_url = f"http://{client_ip}:{endpoint['port']}/"
-            logger.info(f"Response URL for session {session_id}: {response_url}")
+            response_url = self.response_endpoints[session_id]
+            if not isinstance(response_url, str):
+                logger.error(f"Response endpoint for session {session_id} is not a string: {response_url}. Aborting.")
+                return
+            logger.info(f"Using callback URL for session {session_id}: {response_url}")
 
         try:
             while True:

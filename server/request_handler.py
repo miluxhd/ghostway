@@ -11,20 +11,18 @@ async def handle_put_request(request: web.Request):
     """Handle PUT requests for session initialization."""
     tcp_server = request.app['tcp_server'] # Get TcpServer instance
     session_id = request.headers.get('Session-ID')
-    response_port = request.headers.get('Response-Port')
+    client_callback_url = request.headers.get('X-Client-Callback-Url')
     
     if not session_id:
         return web.Response(text="Missing Session-ID header", status=400)
-    if not response_port:
-        return web.Response(text="Missing Response-Port header", status=400)
+    if not client_callback_url:
+        return web.Response(text="Missing X-Client-Callback-Url header", status=400)
     
     # Assuming tcp_server.connection_lock is now asyncio.Lock
     async with tcp_server.connection_lock:
-        tcp_server.response_endpoints[session_id] = {
-            'ip': request.remote, # Correct way to get client IP in aiohttp might vary based on proxy setup
-            'port': response_port
-        }
-        logger.info(f"Registered response endpoint for session {session_id}: {request.remote}:{response_port}")
+        # Store the full callback URL directly
+        tcp_server.response_endpoints[session_id] = client_callback_url
+        logger.info(f"Registered response endpoint for session {session_id}: {client_callback_url}")
     
     # ensure_tcp_connection will be an async method
     success = await tcp_server.ensure_tcp_connection(session_id)
@@ -38,22 +36,14 @@ async def handle_post_request(request: web.Request):
     """Handle POST requests to forward data to the target TCP server."""
     tcp_server = request.app['tcp_server']
     session_id = request.headers.get('Session-ID')
-    response_port = request.headers.get('Response-Port') # For updating endpoint if needed
+    # Removed Response-Port logic, callback URL is fixed at session init
     content_encoding = request.headers.get('X-Content-Encoding')
 
     if not session_id:
         logger.warning(f"POST request missing Session-ID from {request.remote}")
-        # Fallback to client address as session_id is not ideal for async without care
-        # For now, require session_id
         return web.Response(text="Missing Session-ID header", status=400)
 
-    if response_port:
-        async with tcp_server.connection_lock:
-            tcp_server.response_endpoints[session_id] = {
-                'ip': request.remote,
-                'port': response_port
-            }
-            logger.info(f"Updated response endpoint for session {session_id}: {request.remote}:{response_port}")
+    # Removed logic for updating response_endpoints dynamically via POST
     
     try:
         raw_body = await request.read() # Read raw bytes
