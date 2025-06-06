@@ -21,37 +21,42 @@ The project consists of two main services, typically run as Docker containers:
 1.  **Ghostway Client (`ghostway-client`)**:
     *   Acts as the entry point for the application you want to tunnel.
     *   Listens for incoming TCP connections from your local application (e.g., an SSH client pointing to the Ghostway Client's address and port).
-    *   Takes the TCP data, encapsulates it into HTTP POST requests, and sends it to the Ghostway Server.
-    *   Receives HTTP responses from the Ghostway Server (containing data from the target TCP service), decapsulates the TCP data, and forwards it back to your local application.
+    *   Takes the TCP data, encapsulates it into HTTP POST requests, and sends it to the Ghostway Server via a configured URL (see `GHOSTWAY_SERVER_URL`).
+    *   During session initialization, it provides its own public callback URL (see `GHOSTWAY_CLIENT_CALLBACK_BASE_URL`) to the Ghostway Server.
+    *   Receives HTTP responses from the Ghostway Server (containing data from the target TCP service) at its callback URL, decapsulates the TCP data, and forwards it back to your local application.
     *   Built with Python using `asyncio` and `aiohttp` for efficient, non-blocking I/O.
 
 2.  **Ghostway Server (`ghostway-server`)**:
     *   Acts as the exit point of the tunnel, deployed on a machine that can access the target TCP service.
-    *   Listens for HTTP requests from the Ghostway Client.
+    *   Listens for HTTP requests from the Ghostway Client at its public URL.
     *   Receives HTTP POST requests, extracts the encapsulated TCP data, and forwards it to the *actual* target TCP service (e.g., an SSH server).
-    *   Receives TCP data back from the target service, encapsulates it into HTTP responses, and sends it back to the Ghostway Client.
+    *   Receives TCP data back from the target service, encapsulates it into HTTP responses, and sends it back to the Ghostway Client using the callback URL provided by the client during session initialization.
     *   The version discussed and modified in this session uses a synchronous Python implementation with `http.server`, `socketserver`, and `requests`, managed with `threading`. *(Note: Previous versions and development efforts explored an `aiohttp`-based server as well).*
 
 ## Communication Flow
+
+The core HTTP communication between Ghostway Client and Ghostway Server is now URL-based, facilitating deployment behind reverse proxies and services like Cloudflare.
+
 ```
-                               +-------------+     8002 (HTTP     +-------------+
+                               +-------------+     80   (HTTP     +-------------+
 +--------+      TCP (8001)     |  Ghostway   |+------------------>|   Ghostway  |     TCP (8003)    +------------------+
 |  User  |+------------------->|   Client    |<------------------+|    Server   |+----------------->|  Target Service  |
-+--------+                     +-------------+     9001 (HTTP)    +-------------+                   +------------------+
++--------+                     +-------------+     80   (HTTP)    +-------------+                   +------------------+
 
 ```
 
 Data flow:
-1. External TCP Client -> Ghostway Client (8001/TCP)
-2. Ghostway Client -> Ghostway Server (8002/HTTP POST, internal)
-3. Ghostway Server -> TCP Server (8003/TCP)
-4. TCP Server -> Ghostway Server (TCP Response)
-5. Ghostway Server -> Ghostway Client (9001/HTTP Response, internal)
-6. Ghostway Client -> TCP Client (8001/TCP Response)
+1. External TCP Client -> Ghostway Client (at `TCP_PORT`)
+2. Ghostway Client -> Ghostway Server (HTTP POST to `GHOSTWAY_SERVER_URL`)
+3. Ghostway Server -> Target TCP Service (at `TARGET_IP`:`TARGET_TCP_PORT`)
+4. Target TCP Service -> Ghostway Server (TCP Response)
+5. Ghostway Server -> Ghostway Client (HTTP POST to `GHOSTWAY_CLIENT_CALLBACK_BASE_URL`)
+6. Ghostway Client -> External TCP Client (TCP Response via original connection)
 
 ## Features
 
 - Bidirectional TCP traffic tunneling over HTTP.
+- URL-based configuration for inter-service HTTP communication, ideal for reverse proxies.
 - Session-based connection management to handle multiple concurrent tunnels.
 - Automatic connection cleanup
 - Connection pooling and keep-alive support
@@ -97,20 +102,35 @@ docker compose up --build
 
 ## Environment Variables
 
-### Ghostway Client:
+Key environment variables for configuring the tunnel:
+
+### Ghostway Client (`ghostway-client`):
 - `TCP_PORT`: The local TCP port the Ghostway Client listens on for your application (default: 8001).
-- `RESPONSE_HTTP_PORT`: The local HTTP port the Ghostway Client listens on for responses from the Ghostway Server (default: 9001).
-- `TARGET_HTTP_PORT`: The HTTP port of the Ghostway Server (default: 8002).
-- `TARGET_IP`: IP address or hostname of the Ghostway Server.
+- `RESPONSE_HTTP_PORT`: The internal HTTP port the Ghostway Client's response server listens on (default: 80). Traffic from `GHOSTWAY_CLIENT_CALLBACK_BASE_URL` should be directed here by your reverse proxy.
+- `GHOSTWAY_SERVER_URL`: The public URL of the Ghostway Server. The client sends its initial session requests and data packets here. (Example: `https://server.yourdomain.com`, Default for Docker tests: `http://ghostway-server:80`).
+- `GHOSTWAY_CLIENT_CALLBACK_BASE_URL`: The public URL that the Ghostway Server will use to POST responses back to this Ghostway Client. This URL should point (e.g., via Cloudflare) to the `ghostway-client` service, specifically to its `RESPONSE_HTTP_PORT`. (Example: `https://client-callback.yourdomain.com`, Default for Docker tests: `http://ghostway-client:80`).
 - `GZIP_ENABLED`: Enable or disable gzip compression (default: `true`). Set to `false` to disable.
 - `GZIP_THRESHOLD_BYTES`: Minimum payload size in bytes to trigger gzip compression (default: `1024`).
 
-### Ghostway Server:
-- `HTTP_PORT`: The HTTP port the Ghostway Server listens on for requests from the Ghostway Client (default: 8002).
+### Ghostway Server (`ghostway-server`):
+- `HTTP_PORT`: The internal HTTP port the Ghostway Server listens on (default: 80). Traffic from the Ghostway Client's `GHOSTWAY_SERVER_URL` should be directed here by your reverse proxy.
 - `TARGET_TCP_PORT`: The port of the final target TCP service (e.g., SSH server's port 22) (default: 8003 for testing).
 - `TARGET_IP`: The IP address or hostname of the final target TCP service.
 - `GZIP_ENABLED`: Enable or disable gzip compression (default: `true`). Set to `false` to disable.
 - `GZIP_THRESHOLD_BYTES`: Minimum payload size in bytes to trigger gzip compression (default: `1024`).
+
+## Deployment with Reverse Proxies (Cloudflare, etc ..)
+
+The URL-based configuration (`GHOSTWAY_SERVER_URL`, `GHOSTWAY_CLIENT_CALLBACK_BASE_URL`) is designed to work seamlessly with reverse proxies like Cloudflare, Nginx, or others.
+
+**Default Ports for Docker Testing:**
+
+For the default Docker Compose test environment (`docker compose up ghostway-tests`):
+- `ghostway-client`'s `RESPONSE_HTTP_PORT` defaults to `80`.
+- `ghostway-client`'s `GHOSTWAY_SERVER_URL` defaults to `http://ghostway-server:80`.
+- `ghostway-client`'s `GHOSTWAY_CLIENT_CALLBACK_BASE_URL` defaults to `http://ghostway-client:80`.
+- `ghostway-server`'s `HTTP_PORT` defaults to `80`.
+
 
 ## Testing
 

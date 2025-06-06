@@ -3,7 +3,7 @@ import aiohttp
 import base64
 import gzip
 
-from config import logger, TARGET_IP, TARGET_HTTP_PORT, RESPONSE_HTTP_PORT, GZIP_ENABLED, GZIP_THRESHOLD_BYTES
+from config import logger, GHOSTWAY_SERVER_URL, RESPONSE_HTTP_PORT, GZIP_ENABLED, GZIP_THRESHOLD_BYTES, GHOSTWAY_CLIENT_CALLBACK_BASE_URL
 
 INITIAL_BUFFER_SIZE = 1024
 MAX_BUFFER_SIZE = 65536
@@ -23,11 +23,10 @@ class TcpClient:
         try:
             headers = {
                 'Session-ID': session_id,
-                'Response-Port': str(self.response_http_port)
+                'X-Client-Callback-Url': GHOSTWAY_CLIENT_CALLBACK_BASE_URL
             }
-            url = f'http://{TARGET_IP}:{TARGET_HTTP_PORT}/'
-            async with self.http_session.put(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                logger.info(f'Initialized session with HTTP server for {session_id}, status: {response.status}')
+            async with self.http_session.put(GHOSTWAY_SERVER_URL, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                logger.info(f'Initialized session with HTTP server for {session_id} at {GHOSTWAY_SERVER_URL}, status: {response.status}')
                 response.raise_for_status()
         except aiohttp.ClientError as e:
             logger.error(f'Error initializing session with HTTP server for {session_id}: {e}')
@@ -89,8 +88,7 @@ class TcpClient:
         try:
             headers = {
                 'Session-ID': session_id,
-                'Content-Type': 'application/octet-stream',
-                'Response-Port': str(self.response_http_port)
+                'Content-Type': 'application/octet-stream'
             }
             
             payload_data = data
@@ -100,10 +98,8 @@ class TcpClient:
                 logger.info(f"Compressed data for session {session_id}, original: {len(data)}, compressed: {len(payload_data)}")
             
             encoded_data = base64.b64encode(payload_data).decode('utf-8')
-            url = f'http://{TARGET_IP}:{TARGET_HTTP_PORT}/'
-
-            async with self.http_session.post(url, data=encoded_data, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                logger.info(f'Forwarded data to HTTP server for {session_id}, status: {response.status}')
+            async with self.http_session.post(GHOSTWAY_SERVER_URL, data=encoded_data, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                logger.info(f'Forwarded data to HTTP server for {session_id} at {GHOSTWAY_SERVER_URL}, status: {response.status}')
                 response.raise_for_status()
         except aiohttp.ClientError as e:
             logger.error(f'Error forwarding data to HTTP server for {session_id}: {e}')
@@ -113,10 +109,9 @@ class TcpClient:
     async def send_close_event(self, session_id):
         """Send a DELETE request to HTTP server to terminate the corresponding TCP connection."""
         try:
-            url = f'http://{TARGET_IP}:{TARGET_HTTP_PORT}/'
             headers = {'Session-ID': session_id}
-            async with self.http_session.delete(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                logger.info(f'Sent session termination (DELETE) for session {session_id}, status: {response.status}')
+            async with self.http_session.delete(GHOSTWAY_SERVER_URL, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                logger.info(f'Sent session termination (DELETE) for session {session_id} to {GHOSTWAY_SERVER_URL}, status: {response.status}')
                 response.raise_for_status()
         except aiohttp.ClientError as e:
             logger.error(f'Error sending session termination to HTTP server for {session_id}: {e}')
